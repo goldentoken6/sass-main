@@ -1,0 +1,147 @@
+name: CI
+
+env: {NODE_VERSION: 18}
+
+on:
+  push: {branches: [main, 'feature.*']}
+  pull_request:
+
+jobs:
+  static_analysis:
+    name: Static analysis
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v3
+      with: {node-version: '${{ env.NODE_VERSION }}'}
+    - run: npm ci
+    - run: >
+        npm run tangle &&
+          npx gts lint &&
+          npx tsc --noEmit &&
+          npx markdownlint-cli2
+
+  toc:
+    name: Tables of contents
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v3
+      with: {node-version: '${{ env.NODE_VERSION }}'}
+    - run: npm ci
+    - run: npm run toc-check
+
+  link:
+    name: Link referents
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v3
+      with: {node-version: '${{ env.NODE_VERSION }}'}
+    - run: npm ci
+    - run: npm run link-check
+
+  js_api_mirroring:
+    name: JS API mirroring
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v3
+      with: {node-version: '${{ env.NODE_VERSION }}'}
+    - run: npm ci
+    - run: npm run js-api-doc-check
+
+  typedoc:
+    name: Typedoc build
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v3
+      with: {node-version: '${{ env.NODE_VERSION }}'}
+    - run: npm ci
+    - run: npm run typedoc
+
+  protoc:
+    name: "Validate proto"
+    runs-on: "ubuntu-latest"
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bufbuild/buf-setup-action@v1.27.1
+        with: {github_token: "${{ github.token }}"}
+      - name: Generate protobuf code
+        run: buf generate
+
+  embedded_protocol_versions:
+    name: "Validate Embedded Protocol versions"
+    runs-on: "ubuntu-latest"
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check versions match
+        run: |
+          if ! (grep -q '\-dev$' spec/EMBEDDED_PROTOCOL_VERSION ||
+              [[ "$(head -n 1 EMBEDDED_PROTOCOL_CHANGELOG.md)" == \
+                 "## $(cat spec/EMBEDDED_PROTOCOL_VERSION)" ]]); then
+            echo "spec/EMBEDDED_PROTOCOL_VERSION file doesn't match EMBEDDED_PROTOCOL_CHANGELOG version."
+          fi
+
+  embedded_protocol_tag:
+    name: "Tag Embedded Protocol release"
+    runs-on: "ubuntu-latest"
+    if: |
+      github.event_name == 'push' &&
+          github.repository == 'sass/sass' &&
+          github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Get version information
+        id: version-info
+        run: |
+          echo "VERSION=$(cat spec/EMBEDDED_PROTOCOL_VERSION)" | tee --append "$GITHUB_OUTPUT"
+          echo "VERSION_MODIFIED=$(
+            git diff --quiet HEAD^ spec/EMBEDDED_PROTOCOL_VERSION && echo false || echo true
+          )" | tee --append "$GITHUB_OUTPUT"
+      - name: Create release
+        if: |
+          steps.version-info.outputs.VERSION_MODIFIED == 'true' &&
+            !endsWith(steps.version-info.outputs.VERSION, '-dev')
+        run: |
+          git config --global user.name 'SassBot'
+          git config --global user.email 'sass.bot.beep.boop@gmail.com'
+          git tag "embedded-protocol-${{ steps.version-info.outputs.VERSION }}"
+          git push --tags
+
+  # Whenever anything changes in js-api-docs, redeploy the website so it picks
+  # up those changes.
+  heroku:
+    name: Deploy sass-lang.com
+    runs-on: ubuntu-latest
+    needs: [static_analysis, js_api_mirroring, typedoc]
+    if: |
+      github.event_name == 'push' &&
+      github.repository == 'sass/sass' &&
+      github.ref == 'refs/heads/main'
+
+    steps:
+    - uses: actions/checkout@v4
+      with: {fetch-depth: 0}
+
+    - name: Find changed files in js-api-doc
+      id: changed-files
+      uses: tj-actions/changed-files@95690f9ece77c1740f4a55b7f1de9023ed6b1f87
+      with: {files: js-api-doc}
+
+    - name: Deploy
+      if: steps.changed-files.outputs.any_changed == 'true'
+      run: tool/github-action/deploy-heroku.sh
+      env: {HEROKU_TOKEN: "${{ secrets.HEROKU_TOKEN }}"}

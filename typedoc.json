@@ -1,0 +1,22 @@
+{
+  "navigation": {
+    "includeCategories": true,
+  },
+  "hideParameterTypesInTitle": false,
+  "categorizeByGroup": false,
+  "categoryOrder": [
+    "Compile",
+    "Options",
+    "Logger",
+    "Importer",
+    "Custom Function",
+    "Other",
+    "Legacy",
+
+    "Input",
+    "Output",
+    "Plugins",
+    "Messages",
+    "Source Maps"
+  ]
+}
